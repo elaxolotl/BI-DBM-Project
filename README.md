@@ -2,7 +2,7 @@
 
 This project is designed to process and analyze data related to Glovo orders and feedback. It involves data extraction, cleaning, aggregation, and loading into a MySQL database. Additionally, the processed data is exported to Excel files for further analysis.
 
-## Project Overview {#project-overview}
+## Project Overview
 
 The project processes two datasets from an Excel file (`dataset-glovo.xlsx`):
 1. **Orders Data**: Contains information about individual orders, including store code, city, date, basket size, delivery fee, cost per order, distance, and courier waiting time.
