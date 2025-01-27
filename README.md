@@ -21,7 +21,6 @@ The script performs the following steps:
 - Libraries:
   - `pandas`
   - `mysql-connector-python`
-  - `sqlite3`
   - `openpyxl` (for Excel file handling)
 - MySQL Server
 
