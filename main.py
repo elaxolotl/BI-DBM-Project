@@ -1,10 +1,10 @@
 import pandas as pd
 import mysql.connector
 import os
-import sqlite3
+
 
 #extraction
-data_path = "data/dataset-glovo.xlsx"
+data_path = "raw_dataset/dataset-glovo.xlsx"
 df_orders = pd.read_excel(data_path, sheet_name=0, header=1)
 df_feedback = pd.read_excel(data_path, sheet_name=1, header=1)
 
@@ -12,19 +12,21 @@ df_feedback = pd.read_excel(data_path, sheet_name=1, header=1)
 df_orders.columns = [col.lower().replace(' ', '_') for col in df_orders.columns]
 df_feedback.columns = [col.lower().replace(' ', '_') for col in df_feedback.columns]
 
-def clean_dataset(df):
-    df = df.drop_duplicates()
-    df.fillna(0, inplace=True)
-    return df
-
-df_orders = clean_dataset(df_orders)
+df_orders = df_orders.drop_duplicates()
 df_orders = df_orders.drop(columns="commission")
+store_to_city = df_orders[df_orders['city'].notnull()].set_index('store_code')['city'].to_dict()
+df_orders['city'] = df_orders.apply(
+    lambda row: store_to_city.get(row['store_code']) if pd.isnull(row['city']) else row['city'],
+    axis=1
+)
 df_orders['city'] = df_orders['city'].astype('category')
-df_orders['city'] = df_orders['city'].cat.add_categories([0])
+df_orders = df_orders.dropna(subset=['order_id'])
 df_orders['store_code'] = df_orders['store_code'].astype(str)
+df_orders['date'] = df_orders['date'].fillna(method='ffill')
 df_orders['date'] = pd.to_datetime(df_orders['date'])
 df_orders['week'] = df_orders['date'].dt.isocalendar().year.astype(str) + '-' + \
                     df_orders['date'].dt.isocalendar().week.astype(str).str.zfill(2)
+df_orders.fillna({col: 0 for col in df_orders.columns if col != 'city'}, inplace=True)
 
 aggregated_orders = df_orders.groupby(['week', 'store_code']).agg(
     total_basket_size=('basket_size', 'sum'),
@@ -34,14 +36,16 @@ aggregated_orders = df_orders.groupby(['week', 'store_code']).agg(
     avg_waiting_time=('courier_waiting_time_(mins)', 'mean'),
 ).reset_index()
 
-df_feedback = clean_dataset(df_feedback)
+df = df_feedback.drop_duplicates()
 df_feedback['store_code'] = df_feedback['store_code'].astype(str)
 df_feedback['week'] = pd.to_datetime(df_feedback['week'])
 df_feedback['week'] = df_feedback['week'].dt.isocalendar().year.astype(str) + '-' + \
                       df_feedback['week'].dt.isocalendar().week.astype(str).str.zfill(2)
+df_feedback.fillna(0, inplace=True)
 
 df_merged = pd.merge(aggregated_orders, df_feedback, on=['week', 'store_code'], how='inner')
-df_merged= clean_dataset(df_merged)
+df_merged.fillna(0, inplace=True)
+df_merged = df_merged.drop_duplicates()
 print(df_merged)
 
 #loading
@@ -50,7 +54,7 @@ cursor = conn.cursor()
 
 #dim store
 cursor.execute("""
-CREATE TABLE dim_store (
+CREATE TABLE IF NOT EXISTS dim_store (
     store_code VARCHAR(50) PRIMARY KEY,
     city VARCHAR(50)
 );
@@ -58,13 +62,13 @@ CREATE TABLE dim_store (
 dim_store = df_orders[['store_code', 'city']].drop_duplicates()
 for _, row in dim_store.iterrows():
     cursor.execute("""
-        INSERT INTO dim_store (store_code, city)
+        INSERT IGNORE INTO dim_store (store_code, city)
         VALUES (%s, %s)
     """, (row['store_code'], row['city']))
 
 #dim time
 cursor.execute("""
-CREATE TABLE dim_time (
+CREATE TABLE IF NOT EXISTS dim_time (
     week VARCHAR(50) PRIMARY KEY,
     month INT,
     year INT,
@@ -86,7 +90,7 @@ for _, row in dim_time.iterrows():
     
 #dim date
 cursor.execute("""
-CREATE TABLE dim_date (
+CREATE TABLE IF NOT EXISTS dim_date (
     date DATE PRIMARY KEY,
     week VARCHAR(50),
     FOREIGN KEY (week) REFERENCES dim_time(week)
@@ -104,7 +108,7 @@ for _, row in dim_date.iterrows():
 
 #dim order
 cursor.execute("""
-CREATE TABLE dim_order (
+CREATE TABLE IF NOT EXISTS dim_order (
     order_id INT PRIMARY KEY,
     store_code VARCHAR(50),
     FOREIGN KEY (store_code) REFERENCES dim_store(store_code)
@@ -119,8 +123,8 @@ for _, row in dim_order.iterrows():
 
 #fact orders
 cursor.execute("""
-CREATE TABLE fact_orders (
-    order_id INT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS fact_orders (
+    order_id INT,
     date DATE,
     basket_size FLOAT,
     delivery_fee FLOAT,
@@ -146,7 +150,7 @@ for _, row in fact_orders.iterrows():
 
 #fact cancellations
 cursor.execute("""
-CREATE TABLE fact_cancellations (
+CREATE TABLE IF NOT EXISTS fact_cancellations (
     store_code VARCHAR(50),
     week VARCHAR(50),
     customer_absent INT,
@@ -184,7 +188,7 @@ for _, row in fact_cancellations.iterrows():
     
 #fact ratings
 cursor.execute("""
-CREATE TABLE fact_ratings (
+CREATE TABLE IF NOT EXISTS fact_ratings (
     store_code VARCHAR(50),
     week VARCHAR(50),
     wrong_or_missing_products INT,
@@ -228,4 +232,3 @@ with pd.ExcelWriter('dim_tables.xlsx', engine='xlsxwriter') as writer:
     dim_order.to_excel(writer, sheet_name='dim_order', index=False)
 
 conn.commit()
-
